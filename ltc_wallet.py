@@ -54,17 +54,18 @@ def get_ltc_balance(address: str) -> float:
         pass
     return 0.0
 
-def send_ltc_payment(sender_priv_hex_or_wif: str, sender_pub_hex: str, sender_address: str, recipient_address: str, amount_ltc: float) -> dict:
+def send_ltc_payment(sender_priv_hex: str = "", sender_pub_hex: str = "", sender_address: str = "", recipient_address: str = "", amount_ltc: float = 0.0, **kwargs) -> dict:
     """
     실제 블록체인 네트워크로 raw transaction을 서명하고 브로드캐스트하는 온체인 전송 엔진
     """
     try:
+        priv_key = sender_priv_hex or kwargs.get('sender_priv_hex_or_wif') or kwargs.get('private_key') or ""
         # 1. WIF 또는 Hex에서 개인키 바이트 및 공개키 추출
-        if sender_priv_hex_or_wif.startswith('T'):
-            decoded_wif = base58.b58decode_check(sender_priv_hex_or_wif)
+        if priv_key.startswith('T'):
+            decoded_wif = base58.b58decode_check(priv_key)
             private_key_bytes = decoded_wif[1:33]
         else:
-            private_key_bytes = bytes.fromhex(sender_priv_hex_or_wif)
+            private_key_bytes = bytes.fromhex(priv_key)
             
         sk = ecdsa.SigningKey.from_string(private_key_bytes, curve=ecdsa.SECP256k1)
         vk = sk.verifying_key
