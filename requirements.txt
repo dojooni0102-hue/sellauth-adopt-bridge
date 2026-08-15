@@ -4,3 +4,5 @@ requests
 python-dotenv
 ecdsa
 base58
+bech32
+curl_cffi

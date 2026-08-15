@@ -250,6 +250,8 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
     return None
 
 
+PROCESSED_ITEMS = set()
+
 def background_fulfill_order(target_slug: str):
     """백그라운드에서 업자에게서 계정 구매 후 최신 인보이스에 실제 계정 배송"""
     logger.info(f"[백그라운드] 실제 구매 작업 시작: {target_slug}")
