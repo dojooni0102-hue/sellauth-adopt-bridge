@@ -13,3 +13,13 @@ services:
         value: https://shopadopt.mysellauth.com
       - key: TEST_MODE
         value: "False"
+      - key: MY_SELLAUTH_API_KEY
+        value: "6041435|EbpGObFUfemI3XElDjR99Y6EQc9rwFkoU1WGQF1L7ee51812"
+      - key: MY_SHOP_ID
+        value: "261184"
+      - key: MY_PRODUCT_ID_ITEM1
+        value: "835796"
+      - key: MY_PRODUCT_ID_ITEM2
+        value: "835800"
+      - key: MY_PRODUCT_ID_ITEM3
+        value: "835802"
