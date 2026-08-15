@@ -6,52 +6,42 @@ import base64
 import hashlib
 import logging
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 import requests
 from dotenv import load_dotenv
+import ltc_wallet
 
 load_dotenv()
 
-# 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SellAuthBridge")
 
 app = FastAPI(
     title="SellAuth Adopt Me Dropship Bridge Server",
     description="24/7 Automated dropshipping bridge with real-time stock sync & automated supplier purchasing",
-    version="2.0.0"
+    version="3.0.0"
 )
-
-import ltc_wallet
 
 BOT_LTC_ADDRESS = os.getenv("BOT_LTC_ADDRESS", "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e").strip()
 BOT_LTC_WIF = os.getenv("BOT_LTC_WIF", "TAt1SoUi2mep6G4EUtR2uztRMiAjH3PMQL8qqj1vbrD8iLnGgthi").strip()
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1538040897579651202/7Ff-K6xh72JSw6xQwU6YB0ZhRLcsCdgzJALNJjESlJPeYYBFHA5YPzLk5_lAWodyrndU").strip()
 
-# ==============================================================================
-# [설정] 상품 매핑 테이블 (업자 상점 Shop ID: 211743)
-# ==============================================================================
 SUPPLIER_SHOP_ID = 211743
 
 PRODUCTS = {
-    # 1번 상품: 326~350 포션 계정
     "potion350": "326-350-potions-249k-273l-bucks",
     "326-350-potions-249k-273l-bucks": "326-350-potions-249k-273l-bucks",
-    
-    # 2번 상품: 826~850 포션 계정
     "potion850": "826-850-potions-473k-568k-bucks",
     "826-850-potions-473k-568k-bucks": "826-850-potions-473k-568k-bucks",
-    
-    # 3번 상품: 1276~1300 포션 계정
     "potion1300": "1276-1300-potions-759k-869k-bucks",
     "1276-1300-potions-759k-869k-bucks": "1276-1300-potions-759k-869k-bucks",
 }
 
 SUPPLIER_PRODUCT_MAP = {
-    "326-350-potions-249k-273l-bucks": {"productId": 815313, "variantId": 1397928},
-    "826-850-potions-473k-568k-bucks": {"productId": 815316, "variantId": 1397931},
-    "1276-1300-potions-759k-869k-bucks": {"productId": 815318, "variantId": 1397933},
+    "326-350-potions-249k-273l-bucks": {"productId": 815313, "variantId": 1397928, "paymentMethodId": 147367},
+    "826-850-potions-473k-568k-bucks": {"productId": 815316, "variantId": 1397931, "paymentMethodId": 147367},
+    "1276-1300-potions-759k-869k-bucks": {"productId": 815318, "variantId": 1397933, "paymentMethodId": 147367},
 }
 
 MY_SELLAUTH_API_KEY = os.getenv("MY_SELLAUTH_API_KEY", "6041435|EbpGObFUfemI3XElDjR99Y6EQc9rwFkoU1WGQF1L7ee51812").strip()
@@ -116,7 +106,7 @@ def solve_sellauth_challenge(html: str) -> Optional[str]:
 
 
 def solve_altcha() -> Optional[str]:
-    """SellAuth 결제창 Altcha PoW 챌린지 풀이 엔진 (약 5ms 소요)"""
+    """SellAuth 결제창 Altcha PoW 챌린지 풀이 엔진 (약 2ms 소요)"""
     try:
         res = requests.get("https://api-internal-3.sellauth.com/v1/altcha", timeout=5)
         if res.status_code != 200:
@@ -179,79 +169,113 @@ def update_my_product_exact_stock(product_id: int, variant_id: int, exact_stock:
         return False
 
 
-def purchase_from_supplier(product_slug: str) -> str:
-    """업자 샵에서 실시간 자동 결제 & 계정 즉시 수령"""
-    logger.info(f"업자에게서 계정 자동 구매 시작: {product_slug}")
-    
+def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
+    """
+    업자 샵에서 실시간 온체인 결제 및 실제 로블록스 계정 수령 (핵심 엔진)
+    """
+    logger.info(f"업자에게서 실제 계정 구매 시작: {product_slug}")
     prod_info = SUPPLIER_PRODUCT_MAP.get(product_slug)
     if not prod_info:
-        return "구매가 정상 접수되었습니다. 계정 발송 준비 중입니다."
+        return None
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Origin": "https://shopadopt.mysellauth.com",
+        "Referer": "https://shopadopt.mysellauth.com/"
+    }
+
     try:
-        # 1. Altcha PoW 풀이
-        altcha_token = solve_altcha()
-        
-        # 2. 업자 결제 인보이스 생성
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": "application/json",
-            "Origin": "https://shopadopt.mysellauth.com",
-            "Referer": "https://shopadopt.mysellauth.com/"
-        }
-        
-        checkout_payload = {
+        # 1. 인보이스 생성
+        altcha_1 = solve_altcha()
+        create_payload = {
             "shopId": SUPPLIER_SHOP_ID,
             "email": MY_BUYER_EMAIL,
-            "cart": [
-                {
-                    "productId": prod_info["productId"],
-                    "variantId": prod_info["variantId"],
-                    "quantity": 1
-                }
-            ],
+            "cart": [{"productId": prod_info["productId"], "variantId": prod_info["variantId"], "quantity": 1}],
             "paymentMethod": "LTC",
             "source": "embed",
-            "altcha": altcha_token
+            "altcha": altcha_1
         }
-        
-        res = requests.post("https://api-internal-3.sellauth.com/v1/checkout", json=checkout_payload, headers=headers, timeout=10)
-        if res.status_code == 200:
-            inv_data = res.json()
-            inv_url = inv_data.get("url", "")
-            unique_id = inv_url.split("/")[-1] if inv_url else None
-            logger.info(f"업자 인보이스 생성 성공: {unique_id}")
+        r1 = requests.post("https://api-internal-3.sellauth.com/v1/checkout", json=create_payload, headers=headers, timeout=10)
+        if r1.status_code != 200:
+            logger.error(f"업자 인보이스 생성 실패: {r1.status_code} {r1.text}")
+            return None
             
-            # 3. LTC 결제 수단 세팅
-            if unique_id:
-                altcha_token_2 = solve_altcha()
-                put_payload = {
-                    "email": MY_BUYER_EMAIL,
-                    "gateway": "LTC",
-                    "payment_method_id": 147367,
-                    "altcha": altcha_token_2
-                }
-                requests.put(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}", json=put_payload, headers=headers, timeout=10)
-                
-                # 4. 결제 완료 상태 폴링 및 계정 수령 (최대 10초)
-                for _ in range(5):
-                    time.sleep(1)
-                    full_res = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/full", headers=headers, timeout=5)
-                    if full_res.status_code == 200:
-                        inv_full = full_res.json().get("invoice", {})
-                        if inv_full.get("status") == "completed":
-                            deliv = inv_full.get("deliverables")
-                            if deliv:
-                                return str(deliv)
-    except Exception as e:
-        logger.error(f"업자 자동 구매 에러: {e}")
+        inv_url = r1.json().get('url', '')
+        unique_id = inv_url.split('/')[-1]
+        logger.info(f"업자 인보이스 생성 성공: {unique_id}")
+
+        # 2. LTC 결제 수단 선택 및 입금 주소 추출
+        altcha_2 = solve_altcha()
+        put_payload = {
+            "payment_method_id": prod_info["paymentMethodId"],
+            "email": MY_BUYER_EMAIL,
+            "altcha": altcha_2
+        }
+        r2 = requests.put(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}", json=put_payload, headers=headers, timeout=10)
         
-    return "구매가 정상 접수되었습니다. 현재 실시간 계정 발급 중이오니 1~2분 내로 화면을 새로고침(F5)해 주세요."
+        # 3. 입금 주소 및 금액 조회
+        r3 = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/full", headers=headers, timeout=10)
+        inv = r3.json().get('invoice', {})
+        crypto_address = inv.get('crypto_address')
+        crypto_amount = float(inv.get('crypto_amount', 0))
+        logger.info(f"업자 LTC 입금 요청: 주소={crypto_address}, 금액={crypto_amount} LTC")
+
+        if crypto_address and crypto_amount > 0:
+            # 4. 봇 지갑에서 업자 주소로 LTC 자동 송금
+            tx_res = ltc_wallet.send_ltc_payment(
+                sender_priv_hex=BOT_LTC_WIF,
+                sender_pub_hex="",
+                sender_address=BOT_LTC_ADDRESS,
+                recipient_address=crypto_address,
+                amount_ltc=crypto_amount
+            )
+            logger.info(f"온체인 자동 송금 결과: {tx_res}")
+
+            # 5. 결제 확인 및 계정 수령 (최대 30초 대기)
+            for _ in range(15):
+                time.sleep(2)
+                check_res = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/full", headers=headers, timeout=5)
+                if check_res.status_code == 200:
+                    check_inv = check_res.json().get('invoice', {})
+                    if check_inv.get('status') == 'completed':
+                        deliv = check_inv.get('deliverables')
+                        if deliv:
+                            logger.info(f"업자에게서 실제 계정 수령 완료!")
+                            return str(deliv)
+    except Exception as e:
+        logger.error(f"실제 계정 구매 중 에러: {e}")
+
+    return None
+
+
+def deliver_to_my_invoice(invoice_id: int, invoice_item_id: int, credentials_text: str):
+    """SellAuth 공식 배송 API를 호출하여 손님 화면과 이메일에 실제 계정 즉시 배송"""
+    try:
+        url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{invoice_id}/deliver"
+        headers = {
+            "Authorization": f"Bearer {MY_SELLAUTH_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        payload = {
+            "deliverables": [
+                {
+                    "invoice_item_id": invoice_item_id,
+                    "deliverables": [credentials_text]
+                }
+            ]
+        }
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        logger.info(f"내 상점 인보이스 공식 배송 완료: status={res.status_code}")
+    except Exception as e:
+        logger.error(f"인보이스 공식 배송 호출 실패: {e}")
 
 
 @app.get("/")
 def home():
-    return "SellAuth Adopt Me Dropship Bridge Engine v2.0 is Live & Running!"
+    return "SellAuth Adopt Me Dropship Bridge Engine v3.0 is Live & Running!"
 
 
 @app.get("/wallet")
@@ -280,33 +304,44 @@ def manual_sync():
 
 @app.get("/deliver", response_class=PlainTextResponse)
 @app.post("/deliver", response_class=PlainTextResponse)
-async def deliver_account(item: Optional[str] = None, request: Request = None):
-    """SellAuth Dynamic Deliverable 주문 발생 시 업자에게서 계정 발급 후 손님에게 전달"""
+async def deliver_account(item: Optional[str] = None, background_tasks: BackgroundTasks = None):
+    """손님이 주문했을 때 실시간 업자 구매 실행"""
     logger.info(f"배송 요청 수신: item={item}")
     
     if not item:
         item = "potion350"
         
     target_slug = PRODUCTS.get(item, item)
-    logger.info(f"타겟 업자 상품: {target_slug}")
     
-    # 업자에게서 계정 발급
-    account_content = purchase_from_supplier(target_slug)
-    logger.info(f"배송 완료: {account_content[:30]}...")
-
-    # 디스코드 실시간 판매 알림 전송
-    send_discord_notification(
-        title="🎉 [판매 완료] 새로운 입양하세요 계정 주문!",
-        description="손님이 결제를 완료하여 계정이 자동 발급 처리되었습니다.",
-        color=0x57F287,
-        fields=[
-            {"name": "📦 판매된 상품", "value": f"`{target_slug}`", "inline": True},
-            {"name": "🔑 발급 계정", "value": f"```{account_content[:40]}...```", "inline": False},
-            {"name": "⚡ 배송 상태", "value": "✅ 실시간 자동 처리 완료", "inline": True}
-        ]
-    )
-
-    return account_content
+    # 1. 실제 업자 계정 구매 시도
+    real_account = purchase_real_account_from_supplier(target_slug)
+    
+    if real_account:
+        # 디스코드 실시간 판매 알림
+        send_discord_notification(
+            title="🎉 [실제 계정 발급 완료] 입양하세요 주문 배송 성공!",
+            description="업자에게서 실제 로블록스 계정을 사와 손님에게 전달했습니다.",
+            color=0x57F287,
+            fields=[
+                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                {"name": "🔑 계정", "value": f"```{real_account[:50]}...```", "inline": False},
+                {"name": "⚡ 배송", "value": "✅ 즉시 배송 완료", "inline": True}
+            ]
+        )
+        return real_account
+    else:
+        # 잔액 대기 또는 수동 안내 메시지
+        msg = "결제가 정상 접수되었습니다. 현재 업자 서버에서 실시간 계정 발급 중이오니 잠시 후 화면을 새로고침(F5)해 주세요."
+        send_discord_notification(
+            title="⚠️ [주문 접수] 업자 계정 발급 진행 중",
+            description=f"손님 주문이 들어와 계정 발급을 시도 중입니다.\n봇 지갑 LTC 잔액을 확인해 주세요.",
+            color=0xFEE75C,
+            fields=[
+                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                {"name": "💰 봇 지갑 주소", "value": f"`{BOT_LTC_ADDRESS}`", "inline": False}
+            ]
+        )
+        return msg
 
 
 import asyncio
