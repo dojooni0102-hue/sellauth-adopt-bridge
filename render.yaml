@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sellauth-adopt-bridge
+    env: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPPLIER_SHOP_DOMAIN
+        value: shopadopt
+      - key: SUPPLIER_SHOP_URL
+        value: https://shopadopt.mysellauth.com
+      - key: TEST_MODE
+        value: "True"
