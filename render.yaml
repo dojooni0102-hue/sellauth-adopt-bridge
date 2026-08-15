@@ -25,3 +25,7 @@ services:
         value: "835802"
       - key: DISCORD_WEBHOOK_URL
         value: "https://discord.com/api/webhooks/1538040897579651202/7Ff-K6xh72JSw6xQwU6YB0ZhRLcsCdgzJALNJjESlJPeYYBFHA5YPzLk5_lAWodyrndU"
+      - key: BOT_LTC_ADDRESS
+        value: "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e"
+      - key: BOT_LTC_WIF
+        value: "TAt1SoUi2mep6G4EUtR2uztRMiAjH3PMQL8qqj1vbrD8iLnGgthi"

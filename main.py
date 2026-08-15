@@ -21,9 +21,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ==============================================================================
-# [설정] 상품 매핑 테이블
-# ==============================================================================
+import ltc_wallet
+
+BOT_LTC_ADDRESS = os.getenv("BOT_LTC_ADDRESS", "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e").strip()
+BOT_LTC_WIF = os.getenv("BOT_LTC_WIF", "TAt1SoUi2mep6G4EUtR2uztRMiAjH3PMQL8qqj1vbrD8iLnGgthi").strip()
 # 사용자가 요청한 3가지 상품 슬러그/ID를 단축 코드 및 원본 슬러그 모두 매핑
 PRODUCTS = {
     # 1번 상품: 326~350 포션 계정
@@ -289,6 +290,19 @@ async def startup_event():
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return "SellAuth Adopt Me Dropship Bridge Server is Running Perfectly with Real-Time Stock Sync!"
+
+
+@app.get("/wallet")
+def check_bot_wallet():
+    """봇 전용 무료 자동 지갑의 현재 LTC 잔액 및 주소 조회"""
+    balance = ltc_wallet.get_ltc_balance(BOT_LTC_ADDRESS)
+    return {
+        "status": "active",
+        "wallet_type": "Litecoin (LTC) Automated Bot Wallet",
+        "address": BOT_LTC_ADDRESS,
+        "balance_ltc": balance,
+        "explorer_url": f"https://litecoinspace.org/address/{BOT_LTC_ADDRESS}"
+    }
 
 
 @app.get("/sync-stock")
