@@ -13,6 +13,7 @@ from fastapi.responses import PlainTextResponse
 import requests
 from dotenv import load_dotenv
 import ltc_wallet
+import voucher_validator
 
 load_dotenv()
 
@@ -437,9 +438,12 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
     
     invoice_id = None
     invoice_item_id = None
+    proof_text = None
+    
     try:
         body = await request.json()
         invoice_id = body.get("id")
+        proof_text = body.get("proof_of_payment") or body.get("proof")
         items = body.get("items", [])
         if items:
             invoice_item_id = items[0].get("id")
@@ -451,6 +455,35 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
         
     target_slug = PRODUCTS.get(item, item)
     
+    # 문화상품권 핀번호가 전달된 경우 자동 검증 및 분석
+    if proof_text:
+        v_res = voucher_validator.identify_and_validate_voucher(proof_text)
+        if not v_res["is_valid_format"]:
+            logger.warning(f"유효하지 않은 문화상품권 핀번호 감지: {proof_text} - {v_res['reason']}")
+            send_discord_notification(
+                title="❌ [문상 결제 거부] 유효하지 않은 핀번호",
+                description=f"손님이 입력한 문화상품권 핀번호가 유효하지 않아 자동 배송이 거부되었습니다.",
+                color=0xED4245,
+                fields=[
+                    {"name": "⚠️ 사유", "value": f"`{v_res['reason']}`", "inline": True},
+                    {"name": "📝 입력값", "value": f"`{proof_text}`", "inline": True},
+                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
+                ]
+            )
+            return f"입력하신 문화상품권 핀번호가 유효하지 않습니다 ({v_res['reason']}). 정확한 16자리 또는 18자리 핀번호를 확인 후 다시 입력해 주세요."
+        else:
+            logger.info(f"유효한 문화상품권 핀번호 감지: {v_res['voucher_type']} ({v_res['formatted_pin']})")
+            send_discord_notification(
+                title="🎁 [문상 핀번호 접수] 문화상품권 결제 확인",
+                description=f"손님이 제출한 문화상품권 핀번호가 정상 형식으로 확인되었습니다.",
+                color=0xFEE75C,
+                fields=[
+                    {"name": "🏷️ 상품권 종류", "value": f"`{v_res['voucher_type']}`", "inline": True},
+                    {"name": "🔑 핀번호", "value": f"```{v_res['formatted_pin']}```", "inline": False},
+                    {"name": "⚡ 상태", "value": "✅ 형식 검증 통과 ➔ 계정 자동 발송 중", "inline": True}
+                ]
+            )
+
     # 1. 전 세계 유일한 고유 구매 ID 발급 (예: ORD-20260815-14993706-A9C3D1)
     purchase_id = generate_purchase_id(invoice_id)
     
@@ -460,7 +493,7 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
         for pid, record in ledger.items():
             if record.get("invoice_id") == invoice_id and record.get("status") == "COMPLETED":
                 logger.info(f"[원장 확인] 인보이스 {invoice_id}는 이미 계정 발급 완료되었습니다. 중복 구매를 즉시 차단합니다.")
-                return "이미 계정 배송이 완료된 주문입니다. 화면을 새로고침(F5)해 주세요."
+                return "이미 계정 배송이 완료된 주문입니다. 이메일(Gmail 등)을 확인해 주세요."
 
     # 3. 고유 구매 ID로 백그라운드 단일 작업 등록 (1회만 실행 보장)
     background_tasks.add_task(background_fulfill_order, target_slug, purchase_id, invoice_id, invoice_item_id)
