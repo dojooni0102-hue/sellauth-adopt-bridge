@@ -5,10 +5,10 @@ from typing import Optional, Dict
 
 logger = logging.getLogger("VoucherCashout")
 
-# 사장님 정산 기본 계좌 설정 (환경변수 또는 설정값)
+# 사장님 정산 기본 계좌 설정 (토스뱅크 유도준 사장님 계좌 연동 완료)
 DEFAULT_BANK_NAME = os.getenv("CASHOUT_BANK_NAME", "토스뱅크").strip()
-DEFAULT_ACCOUNT_NUMBER = os.getenv("CASHOUT_ACCOUNT_NUMBER", "").strip()
-DEFAULT_ACCOUNT_HOLDER = os.getenv("CASHOUT_ACCOUNT_HOLDER", "").strip()
+DEFAULT_ACCOUNT_NUMBER = os.getenv("CASHOUT_ACCOUNT_NUMBER", "1908-3685-0436").strip()
+DEFAULT_ACCOUNT_HOLDER = os.getenv("CASHOUT_ACCOUNT_HOLDER", "유도준").strip()
 
 def submit_voucher_for_cashout(
     voucher_info: Dict[str, any], 
