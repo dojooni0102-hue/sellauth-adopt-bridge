@@ -20,7 +20,7 @@ logger = logging.getLogger("SellAuthBridge")
 app = FastAPI(
     title="SellAuth Adopt Me Dropship Bridge Server",
     description="24/7 Automated dropshipping bridge with real-time stock sync & automated supplier purchasing",
-    version="3.1.0"
+    version="3.2.0"
 )
 
 BOT_LTC_ADDRESS = os.getenv("BOT_LTC_ADDRESS", "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e").strip()
@@ -62,6 +62,10 @@ MY_PRODUCT_DATA = {
         "variantId": 1443093
     }
 }
+
+# 중복 구매 원천 방지 락 & 장부 (Idempotency)
+PROCESSED_INVOICES = set()
+IN_PROGRESS_INVOICES = set()
 
 supplier_session = requests.Session()
 supplier_session.headers.update({
@@ -233,6 +237,10 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
             )
             logger.info(f"온체인 자동 송금 결과: {tx_res}")
 
+            if not tx_res.get("success"):
+                logger.error(f"LTC 송금 실패: {tx_res.get('error')}")
+                return None
+
             # 5. 결제 확인 및 계정 수령 (최대 60초 대기)
             for _ in range(30):
                 time.sleep(2)
@@ -254,62 +262,90 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
     return None
 
 
-PROCESSED_ITEMS = set()
-
-def background_fulfill_order(target_slug: str):
-    """백그라운드에서 업자에게서 계정 구매 후 최신 인보이스에 실제 계정 배송"""
-    logger.info(f"[백그라운드] 실제 구매 작업 시작: {target_slug}")
-    real_account = purchase_real_account_from_supplier(target_slug)
+def background_fulfill_order(target_slug: str, invoice_id: Optional[int] = None, item_id: Optional[int] = None):
+    """
+    백그라운드에서 업자에게서 계정 구매 후 정확히 해당 인보이스에만 실제 계정 배송 (중복 구매 원천 차단)
+    """
+    global PROCESSED_INVOICES, IN_PROGRESS_INVOICES
     
-    if real_account:
-        # 내 상점의 최신 인보이스 조회 및 배송
-        try:
+    # 1. 인보이스 ID가 지정된 경우 중복 체크
+    if invoice_id:
+        if invoice_id in PROCESSED_INVOICES:
+            logger.info(f"인보이스 {invoice_id}는 이미 처리 완료되었습니다. 중복 구매를 건너뜁니다.")
+            return
+        if invoice_id in IN_PROGRESS_INVOICES:
+            logger.info(f"인보이스 {invoice_id}는 현재 구매 진행 중입니다. 중복 구매를 방지합니다.")
+            return
+        IN_PROGRESS_INVOICES.add(invoice_id)
+        
+    logger.info(f"[백그라운드] 실제 단일 구매 작업 시작: {target_slug} (인보이스={invoice_id})")
+    
+    try:
+        real_account = purchase_real_account_from_supplier(target_slug)
+        
+        if real_account:
+            # 내 상점의 해당 인보이스에 계정 배송
+            target_inv_id = invoice_id
+            target_item_id = item_id
+            
             headers = {"Authorization": f"Bearer {MY_SELLAUTH_API_KEY}", "Accept": "application/json"}
-            inv_res = requests.get(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices", headers=headers, timeout=10)
-            if inv_res.status_code == 200 and inv_res.json().get("data"):
-                latest_inv = inv_res.json()["data"][0]
-                inv_id = latest_inv["id"]
-                inv_item_id = latest_inv["items"][0]["id"] if latest_inv.get("items") else None
-                
-                if inv_item_id:
-                    # SellAuth 공식 배송 API로 실제 계정 주입
-                    deliver_payload = {
-                        "deliverables": [
-                            {"invoice_item_id": inv_item_id, "deliverables": [real_account]}
-                        ]
-                    }
-                    d_res = requests.post(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{inv_id}/deliver", json=deliver_payload, headers=headers, timeout=10)
-                    logger.info(f"인보이스 {inv_id} 실제 계정 배송 성공: {d_res.status_code}")
-        except Exception as e:
-            logger.error(f"인보이스 배송 업데이트 에러: {e}")
+            if not target_inv_id or not target_item_id:
+                inv_res = requests.get(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices", headers=headers, timeout=10)
+                if inv_res.status_code == 200 and inv_res.json().get("data"):
+                    latest_inv = inv_res.json()["data"][0]
+                    target_inv_id = latest_inv["id"]
+                    target_item_id = latest_inv["items"][0]["id"] if latest_inv.get("items") else None
 
-        # 디스코드 알림
-        send_discord_notification(
-            title="🎉 [실제 계정 발급 완료] 주문 배송 성공!",
-            description="업자에게서 실제 계정을 정상 구매하여 손님 인보이스에 배송 완료했습니다.",
-            color=0x57F287,
-            fields=[
-                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
-                {"name": "🔑 계정", "value": f"```{real_account[:50]}...```", "inline": False},
-                {"name": "⚡ 상태", "value": "✅ 배송 완료 (새로고침 시 표시)", "inline": True}
-            ]
-        )
-    else:
-        logger.warning(f"업자 계정 구매 실패 (잔액 또는 네트워크 확인 필요)")
-        send_discord_notification(
-            title="⚠️ [구매 실패] 업자 계정 구매 실패",
-            description="업자에게서 계정을 사오지 못했습니다. 봇 지갑의 LTC 잔액을 확인해 주세요.",
-            color=0xED4245,
-            fields=[
-                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
-                {"name": "💰 봇 지갑 주소", "value": f"`{BOT_LTC_ADDRESS}`", "inline": False}
-            ]
-        )
+            if target_inv_id and target_item_id:
+                # SellAuth 공식 배송 API로 실제 계정 주입
+                deliver_payload = {
+                    "deliverables": [
+                        {"invoice_item_id": target_item_id, "deliverables": [real_account]}
+                    ]
+                }
+                d_res = requests.post(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{target_inv_id}/deliver", json=deliver_payload, headers=headers, timeout=10)
+                logger.info(f"인보이스 {target_inv_id} 실제 계정 배송 완료: status={d_res.status_code}")
+                
+                # replace-delivered로 영수증 화면 내용 영구 교체
+                r_payload = {
+                    "invoice_item_id": target_item_id,
+                    "replacements": [real_account]
+                }
+                requests.post(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{target_inv_id}/replace-delivered", json=r_payload, headers=headers, timeout=10)
+
+            if target_inv_id:
+                PROCESSED_INVOICES.add(target_inv_id)
+
+            # 디스코드 실시간 판매 완료 알림 (딱 1회만 전송!)
+            send_discord_notification(
+                title="🎉 [실제 계정 발급 완료] 주문 배송 성공!",
+                description="업자에게서 실제 로블록스 계정을 정상 구매하여 손님 인보이스에 배송 완료했습니다.",
+                color=0x57F287,
+                fields=[
+                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                    {"name": "🔑 계정", "value": f"```{real_account}```", "inline": False},
+                    {"name": "⚡ 상태", "value": "✅ 배송 완료 (새로고침 시 표시)", "inline": True}
+                ]
+            )
+        else:
+            logger.warning(f"업자 계정 구매 실패 (잔액 부족 또는 통신 에러)")
+            send_discord_notification(
+                title="⚠️ [구매 실패] 업자 계정 구매 실패",
+                description="업자에게서 계정을 사오지 못했습니다. 봇 지갑의 LTC 잔액을 확인해 주세요.",
+                color=0xED4245,
+                fields=[
+                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                    {"name": "💰 봇 지갑 주소", "value": f"`{BOT_LTC_ADDRESS}`", "inline": False}
+                ]
+            )
+    finally:
+        if invoice_id and invoice_id in IN_PROGRESS_INVOICES:
+            IN_PROGRESS_INVOICES.remove(invoice_id)
 
 
 @app.get("/")
 def home():
-    return "SellAuth Adopt Me Dropship Bridge Engine v3.1 is Live & Running!"
+    return "SellAuth Adopt Me Dropship Bridge Engine v3.2 is Live & Running!"
 
 
 @app.get("/wallet")
@@ -338,22 +374,37 @@ def manual_sync():
 
 @app.get("/deliver", response_class=PlainTextResponse)
 @app.post("/deliver", response_class=PlainTextResponse)
-async def deliver_account(background_tasks: BackgroundTasks, item: Optional[str] = None):
+async def deliver_account(request: Request, background_tasks: BackgroundTasks, item: Optional[str] = None):
     """
-    SellAuth 5초 타임아웃 방지: 0.1초 만에 즉시 200 OK 응답하고,
-    백그라운드에서 온체인 구매 후 인보이스에 계정을 주입!
+    주문 1건당 정확히 1번만 구매하도록 중복 방지 락 적용
     """
     logger.info(f"배송 요청 수신: item={item}")
     
+    # SellAuth가 POST 요청으로 보낸 인보이스 메타데이터 파싱
+    invoice_id = None
+    invoice_item_id = None
+    try:
+        body = await request.json()
+        invoice_id = body.get("id")
+        items = body.get("items", [])
+        if items:
+            invoice_item_id = items[0].get("id")
+    except Exception:
+        pass
+        
     if not item:
         item = "potion350"
         
     target_slug = PRODUCTS.get(item, item)
     
-    # 백그라운드에서 실제 온체인 구매 및 배송 실행
-    background_tasks.add_task(background_fulfill_order, target_slug)
+    # 이미 처리된 인보이스라면 중복 구매 차단!
+    if invoice_id and invoice_id in PROCESSED_INVOICES:
+        logger.info(f"인보이스 {invoice_id}는 이미 배송 완료되었습니다. 추가 구매를 차단합니다.")
+        return "이미 계정 배송이 완료된 주문입니다. 화면을 새로고침(F5)해 주세요."
+
+    # 백그라운드 단일 구매 작업 등록 (Idempotent)
+    background_tasks.add_task(background_fulfill_order, target_slug, invoice_id, invoice_item_id)
     
-    # 0.1초 만에 즉시 안내 메시지 반환 (SellAuth 타임아웃 원천 차단)
     return "결제가 정상 완료되었습니다. 현재 로블록스 계정 보안 발급 중입니다 (약 30초 소요). 잠시 후 새로고침(F5)을 누르시거나 이메일을 확인해 주세요."
 
 
