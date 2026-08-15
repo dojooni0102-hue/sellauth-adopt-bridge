@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import ltc_wallet
 import voucher_validator
 import voucher_cashout
+import cryptovoucher_engine
 
 load_dotenv()
 
@@ -456,39 +457,66 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
         
     target_slug = PRODUCTS.get(item, item)
     
-    # 문화상품권 핀번호가 전달된 경우 자동 검증 및 분석
+    # 바우처 / 기프트카드 핀번호가 전달된 경우 자동 검증 및 변환
     if proof_text:
-        v_res = voucher_validator.identify_and_validate_voucher(proof_text)
-        if not v_res["is_valid_format"]:
-            logger.warning(f"유효하지 않은 문화상품권 핀번호 감지: {proof_text} - {v_res['reason']}")
-            send_discord_notification(
-                title="❌ [문상 결제 거부] 유효하지 않은 핀번호",
-                description=f"손님이 입력한 문화상품권 핀번호가 유효하지 않아 자동 배송이 거부되었습니다.",
-                color=0xED4245,
-                fields=[
-                    {"name": "⚠️ 사유", "value": f"`{v_res['reason']}`", "inline": True},
-                    {"name": "📝 입력값", "value": f"`{proof_text}`", "inline": True},
-                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
-                ]
-            )
-            return f"입력하신 문화상품권 핀번호가 유효하지 않습니다 ({v_res['reason']}). 정확한 16자리 또는 18자리 핀번호를 확인 후 다시 입력해 주세요."
+        # 1. 크립토바우처(CryptoVoucher) 형식 검사 (영문 포함 또는 CV 프리픽스)
+        if re.search(r"[A-Za-z]", proof_text) or proof_text.upper().startswith("CV"):
+            cv_res = cryptovoucher_engine.redeem_cryptovoucher_to_ltc(proof_text)
+            if not cv_res["success"]:
+                logger.warning(f"유효하지 않은 크립토바우처 코드 감지: {proof_text} - {cv_res['error']}")
+                send_discord_notification(
+                    title="❌ [크립토바우처 거부] 유효하지 않은 코드",
+                    description="손님이 입력한 크립토바우처 코드가 유효하지 않아 자동 배송이 거부되었습니다.",
+                    color=0xED4245,
+                    fields=[
+                        {"name": "⚠️ 사유", "value": f"`{cv_res['error']}`", "inline": True},
+                        {"name": "📝 입력값", "value": f"`{proof_text}`", "inline": True},
+                        {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
+                    ]
+                )
+                return f"입력하신 크립토바우처 코드가 유효하지 않습니다 ({cv_res['error']}). 코드를 다시 확인해 주세요."
+            else:
+                logger.info(f"정상 크립토바우처 감지 및 LTC 변환 요청: {cv_res['code']}")
+                send_discord_notification(
+                    title="🎫 [크립토바우처 접수 & LTC 자동 충전]",
+                    description="손님이 제출한 크립토바우처가 정상 확인되어 봇 지갑으로 LTC 충전 및 계정 자동 발송이 시작되었습니다.",
+                    color=0x57F287,
+                    fields=[
+                        {"name": "🔑 바우처 코드", "value": f"```{cv_res['code']}```", "inline": False},
+                        {"name": "💰 정산 지갑", "value": f"`{BOT_LTC_ADDRESS}`", "inline": True},
+                        {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
+                    ]
+                )
+        # 2. 한국 문화상품권 (16~18자리 숫자) 검사
         else:
-            logger.info(f"유효한 문화상품권 핀번호 감지: {v_res['voucher_type']} ({v_res['formatted_pin']})")
-            
-            # 환전소에 핀번호 자동 접수 및 사장님 계좌 입금 요청
-            cashout_res = voucher_cashout.submit_voucher_for_cashout(v_res)
-            
-            send_discord_notification(
-                title="🎁 [문상 핀번호 접수 & 자동 환전] 문화상품권 결제 확인",
-                description=f"손님이 제출한 문화상품권 핀번호가 정상 확인되어 환전소 자동 접수 및 계정 발송이 시작되었습니다.",
-                color=0x57F287,
-                fields=[
-                    {"name": "🏷️ 상품권 종류", "value": f"`{v_res['voucher_type']}`", "inline": True},
-                    {"name": "🔑 핀번호", "value": f"```{v_res['formatted_pin']}```", "inline": False},
-                    {"name": "🏦 환전 정산", "value": f"```{cashout_res.get('message', '정산 진행 중')}```", "inline": False},
-                    {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
-                ]
-            )
+            v_res = voucher_validator.identify_and_validate_voucher(proof_text)
+            if not v_res["is_valid_format"]:
+                logger.warning(f"유효하지 않은 문화상품권 핀번호 감지: {proof_text} - {v_res['reason']}")
+                send_discord_notification(
+                    title="❌ [문상 결제 거부] 유효하지 않은 핀번호",
+                    description="손님이 입력한 문화상품권 핀번호가 유효하지 않아 자동 배송이 거부되었습니다.",
+                    color=0xED4245,
+                    fields=[
+                        {"name": "⚠️ 사유", "value": f"`{v_res['reason']}`", "inline": True},
+                        {"name": "📝 입력값", "value": f"`{proof_text}`", "inline": True},
+                        {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
+                    ]
+                )
+                return f"입력하신 문화상품권 핀번호가 유효하지 않습니다 ({v_res['reason']}). 정확한 핀번호를 확인 후 다시 입력해 주세요."
+            else:
+                logger.info(f"유효한 문화상품권 핀번호 감지: {v_res['voucher_type']} ({v_res['formatted_pin']})")
+                cashout_res = voucher_cashout.submit_voucher_for_cashout(v_res)
+                send_discord_notification(
+                    title="🎁 [문상 핀번호 접수 & 자동 환전] 문화상품권 결제 확인",
+                    description="손님이 제출한 문화상품권 핀번호가 정상 확인되어 환전소 자동 접수 및 계정 발송이 시작되었습니다.",
+                    color=0x57F287,
+                    fields=[
+                        {"name": "🏷️ 상품권 종류", "value": f"`{v_res['voucher_type']}`", "inline": True},
+                        {"name": "🔑 핀번호", "value": f"```{v_res['formatted_pin']}```", "inline": False},
+                        {"name": "🏦 환전 정산", "value": f"```{cashout_res.get('message', '정산 진행 중')}```", "inline": False},
+                        {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
+                    ]
+                )
 
     # 1. 전 세계 유일한 고유 구매 ID 발급 (예: ORD-20260815-14993706-A9C3D1)
     purchase_id = generate_purchase_id(invoice_id)
