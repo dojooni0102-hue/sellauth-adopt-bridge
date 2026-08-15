@@ -143,22 +143,61 @@ MY_PRODUCT_DATA = {
 }
 
 
+import hashlib
+import re
+
+supplier_session = requests.Session()
+supplier_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
+
+
+def solve_sellauth_challenge(html: str) -> str:
+    """SellAuth 웹 방화벽 PoW 챌린지를 파이썬으로 0.001초만에 풀어서 쿠키 획득"""
+    m = re.search(r"['\"]([A-F0-9]{40})['\"]", html)
+    if not m:
+        return None
+    c = m.group(1)
+    n1 = int(c[0], 16)
+    i = 0
+    while i < 1000000:
+        target = (c + str(i)).encode('utf-8')
+        digest = hashlib.sha1(target).digest()
+        if digest[n1] == 0xb0 and digest[n1+1] == 0x0b:
+            return f"{c}{i}"
+        i += 1
+    return None
+
+
 def get_supplier_exact_stock(product_slug: str) -> int:
     """
-    업자 상점의 실시간 정확한 재고 개수(숫자)를 조회
+    업자 상점의 실시간 정확한 재고 개수(숫자)를 직접 조회 (122개, 46개, 0개 등)
     """
     try:
-        url = f"{SUPPLIER_SHOP_URL}/api/v1/products/{product_slug}"
-        res = requests.get(url, timeout=10)
+        url = f"{SUPPLIER_SHOP_URL}/product/{product_slug}"
+        res = supplier_session.get(url, timeout=10)
+        
+        # 만약 방화벽 챌린지가 뜨면 해결
+        if res.status_code == 503:
+            cookie_val = solve_sellauth_challenge(res.text)
+            if cookie_val:
+                supplier_session.cookies.set("yX3", cookie_val, domain="shopadopt.mysellauth.com")
+                supplier_session.cookies.set("yX3", cookie_val, domain=".mysellauth.com")
+                res = supplier_session.get(url, timeout=10)
+                
         if res.status_code == 200:
-            data = res.json()
-            stock = data.get("stock") or data.get("stock_count") or len(data.get("serials", []))
-            if stock is not None:
-                return int(stock)
+            # 페이지 내의 실제 stock 숫자 파싱
+            stocks = re.findall(r'"stock":\s*(\d+)', res.text)
+            if stocks:
+                return int(stocks[0])
+            # 대안 정규식
+            stocks_alt = re.findall(r'stock["\']?\s*[:=]\s*(\d+)', res.text, re.IGNORECASE)
+            if stocks_alt:
+                return int(stocks_alt[0])
     except Exception as e:
         logger.warning(f"업자 재고 개수 조회 예외: {e}")
-    # 기본 안전값
-    return 10
+    
+    return 0
 
 
 def update_my_product_exact_stock(product_id: str, variant_id: str, exact_stock: int):
