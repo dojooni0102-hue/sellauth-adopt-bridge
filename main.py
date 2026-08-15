@@ -459,14 +459,38 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
     
     # 바우처 / 기프트카드 핀번호가 전달된 경우 자동 검증 및 변환
     if proof_text:
-        # 1. 크립토바우처(CryptoVoucher) 형식 검사 (영문 포함 또는 CV 프리픽스)
-        if re.search(r"[A-Za-z]", proof_text) or proof_text.upper().startswith("CV"):
+        cleaned_proof = proof_text.strip().upper().replace(" ", "")
+        
+        # 1. 구글 기프트카드 (Google Play 16자리 영숫자 또는 4-4-4-4 형태)
+        is_alpha = bool(re.search(r"[A-Z]", cleaned_proof))
+        clean_len = len(cleaned_proof.replace("-", ""))
+        
+        if is_alpha and 15 <= clean_len <= 20 and not cleaned_proof.startswith("CV"):
+            # 구글 기프트카드 감지
+            formatted_gp = cleaned_proof
+            if len(cleaned_proof.replace("-", "")) == 16:
+                raw_s = cleaned_proof.replace("-", "")
+                formatted_gp = f"{raw_s[:4]}-{raw_s[4:8]}-{raw_s[8:12]}-{raw_s[12:]}"
+                
+            logger.info(f"구글 기프트카드 감지: {formatted_gp}")
+            send_discord_notification(
+                title="💳 [구글 기프트카드 결제 접수]",
+                description="손님이 구글 플레이 기프트카드로 결제하였습니다. 코드가 실시간 접수되어 손님 Gmail로 계정 자동 발송이 시작되었습니다.",
+                color=0x4285F4,
+                fields=[
+                    {"name": "🏷️ 기프트카드 종류", "value": "`Google Play 구글 기프트카드`", "inline": True},
+                    {"name": "🔑 구글 기프트카드 코드", "value": f"```{formatted_gp}```", "inline": False},
+                    {"name": "⚡ 상태", "value": "✅ 코드 정상 접수 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
+                ]
+            )
+        # 2. 크립토바우처(CryptoVoucher) 형식 검사
+        elif cleaned_proof.startswith("CV") or (is_alpha and clean_len < 15):
             cv_res = cryptovoucher_engine.redeem_cryptovoucher_to_ltc(proof_text)
             if not cv_res["success"]:
                 logger.warning(f"유효하지 않은 크립토바우처 코드 감지: {proof_text} - {cv_res['error']}")
                 send_discord_notification(
-                    title="❌ [크립토바우처 거부] 유효하지 않은 코드",
-                    description="손님이 입력한 크립토바우처 코드가 유효하지 않아 자동 배송이 거부되었습니다.",
+                    title="❌ [바우처 거부] 유효하지 않은 코드",
+                    description="손님이 입력한 바우처 코드가 유효하지 않아 자동 배송이 거부되었습니다.",
                     color=0xED4245,
                     fields=[
                         {"name": "⚠️ 사유", "value": f"`{cv_res['error']}`", "inline": True},
@@ -474,7 +498,7 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
                         {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
                     ]
                 )
-                return f"입력하신 크립토바우처 코드가 유효하지 않습니다 ({cv_res['error']}). 코드를 다시 확인해 주세요."
+                return f"입력하신 바우처 코드가 유효하지 않습니다 ({cv_res['error']}). 코드를 다시 확인해 주세요."
             else:
                 logger.info(f"정상 크립토바우처 감지 및 LTC 변환 요청: {cv_res['code']}")
                 send_discord_notification(
@@ -487,7 +511,7 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
                         {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
                     ]
                 )
-        # 2. 한국 문화상품권 (16~18자리 숫자) 검사
+        # 3. 한국 문화상품권 / 컬쳐랜드 / 해피머니 (16~18자리 숫자) 검사
         else:
             v_res = voucher_validator.identify_and_validate_voucher(proof_text)
             if not v_res["is_valid_format"]:
