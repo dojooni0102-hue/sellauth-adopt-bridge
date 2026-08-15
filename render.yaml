@@ -12,4 +12,4 @@ services:
       - key: SUPPLIER_SHOP_URL
         value: https://shopadopt.mysellauth.com
       - key: TEST_MODE
-        value: "True"
+        value: "False"

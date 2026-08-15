@@ -47,7 +47,7 @@ SUPPLIER_SHOP_URL = os.getenv("SUPPLIER_SHOP_URL", "https://shopadopt.mysellauth
 SUPPLIER_SHOP_ID = os.getenv("SUPPLIER_SHOP_ID", "").strip()
 SUPPLIER_API_KEY = os.getenv("SUPPLIER_API_KEY", "").strip()
 MY_BUYER_EMAIL = os.getenv("MY_BUYER_EMAIL", "buyer@example.com").strip()
-TEST_MODE = os.getenv("TEST_MODE", "True").lower() in ("true", "1", "yes")
+TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")
 
 
 def purchase_from_supplier(product_slug_or_id: str) -> str:
