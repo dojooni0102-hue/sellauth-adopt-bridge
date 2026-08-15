@@ -30,7 +30,7 @@ app = FastAPI(
 
 BOT_LTC_ADDRESS = os.getenv("BOT_LTC_ADDRESS", "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e").strip()
 BOT_LTC_WIF = os.getenv("BOT_LTC_WIF", "TAt1SoUi2mep6G4EUtR2uztRMiAjH3PMQL8qqj1vbrD8iLnGgthi").strip()
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1538040897579651202/7Ff-K6xh72JSw6xQwU6YB0ZhRLcsCdgzJALNJjESlJPeYYBFHA5YPzLk5_lAWodyrndU").strip()
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1538132500252196895/zvwekUl3n_imKxLE9EYwkzHv0HSNK7tC0At5-AmmnWdvbqAwo3e6D4vGxsBjcrutyzxX").strip()
 
 SUPPLIER_SHOP_ID = 211743
 
@@ -363,16 +363,17 @@ def background_fulfill_order(target_slug: str, purchase_id: str, invoice_id: Opt
             ledger[purchase_id]["completed_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
             save_ledger(ledger)
 
-            # 디스코드 실시간 판매 완료 알림 (고유 구매 ID 표시)
+            # 디스코드 실시간 거래 완료 영수증 알림 (고유 구매 ID & 거래 체결 내역 표시)
             send_discord_notification(
-                title="🎉 [실제 계정 발급 완료] 주문 배송 성공!",
-                description="업자에게서 실제 로블록스 계정을 정상 구매하여 손님 인보이스에 배송 완료했습니다.",
-                color=0x57F287,
+                title="🤝 [거래 체결 완료] 로블록스 계정 구매 계약 성사",
+                description="손님과의 정식 거래가 성공적으로 체결되었으며, 정품 계정이 손님 인보이스 및 이메일로 안전하게 인도되었습니다.",
+                color=0x2ECC71,
                 fields=[
-                    {"name": "🏷️ 고유 구매 ID", "value": f"`{purchase_id}`", "inline": True},
-                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
-                    {"name": "🔑 발급 계정", "value": f"```{real_account}```", "inline": False},
-                    {"name": "⚡ 중복 방지", "value": "✅ 1주문 1구매 100% 보증 완료", "inline": True}
+                    {"name": "📜 거래 계약 번호", "value": f"```{purchase_id}```", "inline": False},
+                    {"name": "📦 거래 상품", "value": f"`{target_slug}`", "inline": True},
+                    {"name": "💵 거래 상태", "value": "✅ `입금 완료 & 거래 체결`", "inline": True},
+                    {"name": "🔑 인도된 로블록스 계정", "value": f"```{real_account}```", "inline": False},
+                    {"name": "📧 배송 확인", "value": "✅ 손님 Gmail로 1초 이메일 배송 완료", "inline": True}
                 ]
             )
         else:
