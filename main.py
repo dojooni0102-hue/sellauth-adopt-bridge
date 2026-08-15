@@ -20,7 +20,7 @@ logger = logging.getLogger("SellAuthBridge")
 app = FastAPI(
     title="SellAuth Adopt Me Dropship Bridge Server",
     description="24/7 Automated dropshipping bridge with real-time stock sync & automated supplier purchasing",
-    version="3.0.0"
+    version="3.1.0"
 )
 
 BOT_LTC_ADDRESS = os.getenv("BOT_LTC_ADDRESS", "LfZY83v3AX2GH4S9hd4qKLhTmbHHzJTp7e").strip()
@@ -213,7 +213,7 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
             "email": MY_BUYER_EMAIL,
             "altcha": altcha_2
         }
-        r2 = requests.put(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}", json=put_payload, headers=headers, timeout=10)
+        requests.put(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}", json=put_payload, headers=headers, timeout=10)
         
         # 3. 입금 주소 및 금액 조회
         r3 = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/full", headers=headers, timeout=10)
@@ -242,7 +242,7 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
                     if check_inv.get('status') == 'completed':
                         deliv = check_inv.get('deliverables')
                         if deliv:
-                            logger.info(f"업자에게서 실제 계정 수령 완료!")
+                            logger.info(f"업자에게서 실제 계정 수령 완료: {deliv}")
                             return str(deliv)
     except Exception as e:
         logger.error(f"실제 계정 구매 중 에러: {e}")
@@ -250,32 +250,60 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
     return None
 
 
-def deliver_to_my_invoice(invoice_id: int, invoice_item_id: int, credentials_text: str):
-    """SellAuth 공식 배송 API를 호출하여 손님 화면과 이메일에 실제 계정 즉시 배송"""
-    try:
-        url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{invoice_id}/deliver"
-        headers = {
-            "Authorization": f"Bearer {MY_SELLAUTH_API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        payload = {
-            "deliverables": [
-                {
-                    "invoice_item_id": invoice_item_id,
-                    "deliverables": [credentials_text]
-                }
+def background_fulfill_order(target_slug: str):
+    """백그라운드에서 업자에게서 계정 구매 후 최신 인보이스에 실제 계정 배송"""
+    logger.info(f"[백그라운드] 실제 구매 작업 시작: {target_slug}")
+    real_account = purchase_real_account_from_supplier(target_slug)
+    
+    if real_account:
+        # 내 상점의 최신 인보이스 조회 및 배송
+        try:
+            headers = {"Authorization": f"Bearer {MY_SELLAUTH_API_KEY}", "Accept": "application/json"}
+            inv_res = requests.get(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices", headers=headers, timeout=10)
+            if inv_res.status_code == 200 and inv_res.json().get("data"):
+                latest_inv = inv_res.json()["data"][0]
+                inv_id = latest_inv["id"]
+                inv_item_id = latest_inv["items"][0]["id"] if latest_inv.get("items") else None
+                
+                if inv_item_id:
+                    # SellAuth 공식 배송 API로 실제 계정 주입
+                    deliver_payload = {
+                        "deliverables": [
+                            {"invoice_item_id": inv_item_id, "deliverables": [real_account]}
+                        ]
+                    }
+                    d_res = requests.post(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/invoices/{inv_id}/deliver", json=deliver_payload, headers=headers, timeout=10)
+                    logger.info(f"인보이스 {inv_id} 실제 계정 배송 성공: {d_res.status_code}")
+        except Exception as e:
+            logger.error(f"인보이스 배송 업데이트 에러: {e}")
+
+        # 디스코드 알림
+        send_discord_notification(
+            title="🎉 [실제 계정 발급 완료] 주문 배송 성공!",
+            description="업자에게서 실제 계정을 정상 구매하여 손님 인보이스에 배송 완료했습니다.",
+            color=0x57F287,
+            fields=[
+                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                {"name": "🔑 계정", "value": f"```{real_account[:50]}...```", "inline": False},
+                {"name": "⚡ 상태", "value": "✅ 배송 완료 (새로고침 시 표시)", "inline": True}
             ]
-        }
-        res = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"내 상점 인보이스 공식 배송 완료: status={res.status_code}")
-    except Exception as e:
-        logger.error(f"인보이스 공식 배송 호출 실패: {e}")
+        )
+    else:
+        logger.warning(f"업자 계정 구매 실패 (잔액 또는 네트워크 확인 필요)")
+        send_discord_notification(
+            title="⚠️ [구매 실패] 업자 계정 구매 실패",
+            description="업자에게서 계정을 사오지 못했습니다. 봇 지갑의 LTC 잔액을 확인해 주세요.",
+            color=0xED4245,
+            fields=[
+                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                {"name": "💰 봇 지갑 주소", "value": f"`{BOT_LTC_ADDRESS}`", "inline": False}
+            ]
+        )
 
 
 @app.get("/")
 def home():
-    return "SellAuth Adopt Me Dropship Bridge Engine v3.0 is Live & Running!"
+    return "SellAuth Adopt Me Dropship Bridge Engine v3.1 is Live & Running!"
 
 
 @app.get("/wallet")
@@ -304,8 +332,11 @@ def manual_sync():
 
 @app.get("/deliver", response_class=PlainTextResponse)
 @app.post("/deliver", response_class=PlainTextResponse)
-async def deliver_account(item: Optional[str] = None, background_tasks: BackgroundTasks = None):
-    """손님이 주문했을 때 실시간 업자 구매 실행"""
+async def deliver_account(background_tasks: BackgroundTasks, item: Optional[str] = None):
+    """
+    SellAuth 5초 타임아웃 방지: 0.1초 만에 즉시 200 OK 응답하고,
+    백그라운드에서 온체인 구매 후 인보이스에 계정을 주입!
+    """
     logger.info(f"배송 요청 수신: item={item}")
     
     if not item:
@@ -313,35 +344,11 @@ async def deliver_account(item: Optional[str] = None, background_tasks: Backgrou
         
     target_slug = PRODUCTS.get(item, item)
     
-    # 1. 실제 업자 계정 구매 시도
-    real_account = purchase_real_account_from_supplier(target_slug)
+    # 백그라운드에서 실제 온체인 구매 및 배송 실행
+    background_tasks.add_task(background_fulfill_order, target_slug)
     
-    if real_account:
-        # 디스코드 실시간 판매 알림
-        send_discord_notification(
-            title="🎉 [실제 계정 발급 완료] 입양하세요 주문 배송 성공!",
-            description="업자에게서 실제 로블록스 계정을 사와 손님에게 전달했습니다.",
-            color=0x57F287,
-            fields=[
-                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
-                {"name": "🔑 계정", "value": f"```{real_account[:50]}...```", "inline": False},
-                {"name": "⚡ 배송", "value": "✅ 즉시 배송 완료", "inline": True}
-            ]
-        )
-        return real_account
-    else:
-        # 잔액 대기 또는 수동 안내 메시지
-        msg = "결제가 정상 접수되었습니다. 현재 업자 서버에서 실시간 계정 발급 중이오니 잠시 후 화면을 새로고침(F5)해 주세요."
-        send_discord_notification(
-            title="⚠️ [주문 접수] 업자 계정 발급 진행 중",
-            description=f"손님 주문이 들어와 계정 발급을 시도 중입니다.\n봇 지갑 LTC 잔액을 확인해 주세요.",
-            color=0xFEE75C,
-            fields=[
-                {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
-                {"name": "💰 봇 지갑 주소", "value": f"`{BOT_LTC_ADDRESS}`", "inline": False}
-            ]
-        )
-        return msg
+    # 0.1초 만에 즉시 안내 메시지 반환 (SellAuth 타임아웃 원천 차단)
+    return "결제가 정상 완료되었습니다. 현재 로블록스 계정 보안 발급 중입니다 (약 30초 소요). 잠시 후 새로고침(F5)을 누르시거나 이메일을 확인해 주세요."
 
 
 import asyncio
