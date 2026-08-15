@@ -465,7 +465,7 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
     # 3. 고유 구매 ID로 백그라운드 단일 작업 등록 (1회만 실행 보장)
     background_tasks.add_task(background_fulfill_order, target_slug, purchase_id, invoice_id, invoice_item_id)
     
-    return f"결제가 정상 완료되었습니다. [주문 ID: {purchase_id}] 로블록스 계정 보안 발급 중입니다 (약 30초 소요). 잠시 후 새로고침(F5)을 누르시거나 이메일을 확인해 주세요."
+    return f"구매해 주셔서 감사합니다! [주문 ID: {purchase_id}]\n주문하신 로블록스 계정 정보(ID:PW)는 입력하신 이메일(Gmail 등)로 안전하게 자동 발송되었습니다. 잠시 후 이메일함을 확인해 주세요."
 
 
 import asyncio
