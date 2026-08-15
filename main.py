@@ -115,24 +115,29 @@ def purchase_from_supplier(product_slug_or_id: str) -> str:
     )
 
 
-# ==============================================================================
-# [설정] 내 SellAuth 상점 API 설정 (품절 자동 동기화용)
-# ==============================================================================
-MY_SELLAUTH_API_KEY = os.getenv("MY_SELLAUTH_API_KEY", "").strip()
-MY_SHOP_ID = os.getenv("MY_SHOP_ID", "").strip()
+import asyncio
 
-# 내 샵의 3가지 상품 ID 및 Variant ID
+# ==============================================================================
+# [설정] 내 SellAuth 상점 API 설정 (실시간 재고 동기화용)
+# ==============================================================================
+MY_SELLAUTH_API_KEY = os.getenv("MY_SELLAUTH_API_KEY", "6041435|EbpGObFUfemI3XElDjR99Y6EQc9rwFkoU1WGQF1L7ee51812").strip()
+MY_SHOP_ID = os.getenv("MY_SHOP_ID", "261184").strip()
+
+# 내 샵의 3가지 상품 및 옵션(Variant) 매핑 데이터
 MY_PRODUCT_DATA = {
     "item1": {
-        "product_id": os.getenv("MY_PRODUCT_ID_ITEM1", "835796").strip(),
+        "product_id": "835796",
+        "variant_id": "1443082",
         "slug": "326-350-potions-249k-273l-bucks"
     },
     "item2": {
-        "product_id": os.getenv("MY_PRODUCT_ID_ITEM2", "835800").strip(),
+        "product_id": "835800",
+        "variant_id": "1443091",
         "slug": "826-850-potions-473k-568k-bucks"
     },
     "item3": {
-        "product_id": os.getenv("MY_PRODUCT_ID_ITEM3", "835802").strip(),
+        "product_id": "835802",
+        "variant_id": "1443093",
         "slug": "1276-1300-potions-759k-869k-bucks"
     },
 }
@@ -152,15 +157,15 @@ def get_supplier_exact_stock(product_slug: str) -> int:
                 return int(stock)
     except Exception as e:
         logger.warning(f"업자 재고 개수 조회 예외: {e}")
-    # 기본 안전값: 재고 있음(10개) 또는 0
+    # 기본 안전값
     return 10
 
 
-def update_my_product_exact_stock(product_id: str, exact_stock: int):
+def update_my_product_exact_stock(product_id: str, variant_id: str, exact_stock: int):
     """
-    내 SellAuth 상점 상품의 재고 개수를 업자와 100% 동일하게 동기화
+    내 SellAuth 상점 상품의 재고 숫자를 업자와 100% 동일하게 실시간 수정 (SellAuth 공식 엔드포인트)
     """
-    if not (MY_SELLAUTH_API_KEY and MY_SHOP_ID and product_id):
+    if not (MY_SELLAUTH_API_KEY and MY_SHOP_ID and product_id and variant_id):
         return
 
     try:
@@ -169,33 +174,43 @@ def update_my_product_exact_stock(product_id: str, exact_stock: int):
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
+        # SellAuth 공식 Variant Stock 업데이트 엔드포인트
+        url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{product_id}/stock/{variant_id}"
+        payload = {"stock": exact_stock}
+        res = requests.put(url, json=payload, headers=headers, timeout=10)
         
-        # 1. 현재 상품 정보 및 variant ID 조회
-        prod_res = requests.get(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{product_id}", headers=headers, timeout=10)
-        if prod_res.status_code == 200:
-            prod_data = prod_res.json()
-            variants = prod_data.get("variants", [])
-            for v in variants:
-                v_id = v.get("id")
-                # SellAuth Variant 재고 업데이트
-                update_url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{product_id}/variants/{v_id}"
-                payload = {"stock": exact_stock}
-                requests.put(update_url, json=payload, headers=headers, timeout=10)
-                
-        logger.info(f"내 상품({product_id}) 재고를 업자와 동일하게 동기화 완료: {exact_stock}개")
+        if res.status_code == 200:
+            logger.info(f"✅ 내 상품({product_id}) 재고 숫자 동기화 완료 -> {exact_stock}개 (응답: 200 OK)")
+        else:
+            logger.warning(f"⚠️ 재고 업데이트 응답: {res.status_code} - {res.text}")
     except Exception as e:
         logger.error(f"내 상품 재고 업데이트 실패: {e}")
 
 
 def sync_all_stocks():
     """모든 상품의 업자 재고 개수를 내 상점에 실시간 동기화"""
-    logger.info("🔄 업자 서버와 실시간 재고 개수 동기화 중...")
+    logger.info("🔄 [동기화] 업자 서버 재고 숫자를 내 상점으로 복사 중...")
+    results = {}
     for item_key, info in MY_PRODUCT_DATA.items():
         supplier_slug = info["slug"]
         prod_id = info["product_id"]
+        var_id = info["variant_id"]
         exact_stock = get_supplier_exact_stock(supplier_slug)
-        update_my_product_exact_stock(prod_id, exact_stock)
-    logger.info("✅ 전체 상품 재고 동기화 완료!")
+        update_my_product_exact_stock(prod_id, var_id, exact_stock)
+        results[item_key] = {"stock": exact_stock, "product_id": prod_id}
+    logger.info("✅ [동기화 완료] 전체 상품 재고가 최신 상태로 변경되었습니다.")
+    return results
+
+
+async def periodic_stock_sync_task():
+    """60초마다 주기적으로 업자 재고를 감시하여 내 샵 숫자를 자동 갱신하는 백그라운드 태스크"""
+    while True:
+        try:
+            sync_all_stocks()
+        except Exception as e:
+            logger.error(f"주기적 재고 동기화 중 에러: {e}")
+        # 60초 대기
+        await asyncio.sleep(60)
 
 
 # ==============================================================================
@@ -204,19 +219,21 @@ def sync_all_stocks():
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("SellAuth Bridge Server Started with Auto-Stock-Sync support")
+    logger.info("🚀 SellAuth Bridge Server Started with 60s Auto-Stock Sync Engine")
+    # 백그라운드에서 60초마다 재고 동기화 자동 실행
+    asyncio.create_task(periodic_stock_sync_task())
 
 
 @app.get("/", response_class=PlainTextResponse)
 def root():
-    return "SellAuth Adopt Me Dropship Bridge Server is Running Perfectly!"
+    return "SellAuth Adopt Me Dropship Bridge Server is Running Perfectly with Real-Time Stock Sync!"
 
 
 @app.get("/sync-stock")
 def manual_sync():
-    """수동 재고 동기화 엔드포인트"""
-    sync_all_stocks()
-    return {"status": "success", "message": "Stock synchronization triggered"}
+    """수동 즉시 재고 동기화 엔드포인트"""
+    data = sync_all_stocks()
+    return {"status": "success", "message": "All product stocks synchronized", "data": data}
 
 
 @app.get("/deliver", response_class=PlainTextResponse)
