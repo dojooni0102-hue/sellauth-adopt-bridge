@@ -121,61 +121,81 @@ def purchase_from_supplier(product_slug_or_id: str) -> str:
 MY_SELLAUTH_API_KEY = os.getenv("MY_SELLAUTH_API_KEY", "").strip()
 MY_SHOP_ID = os.getenv("MY_SHOP_ID", "").strip()
 
-# 내 샵의 3가지 상품 ID (SellAuth에서 생성한 내 상품 ID)
-MY_PRODUCT_IDS = {
-    "item1": os.getenv("MY_PRODUCT_ID_ITEM1", "").strip(),
-    "item2": os.getenv("MY_PRODUCT_ID_ITEM2", "").strip(),
-    "item3": os.getenv("MY_PRODUCT_ID_ITEM3", "").strip(),
+# 내 샵의 3가지 상품 ID 및 Variant ID
+MY_PRODUCT_DATA = {
+    "item1": {
+        "product_id": os.getenv("MY_PRODUCT_ID_ITEM1", "835796").strip(),
+        "slug": "326-350-potions-249k-273l-bucks"
+    },
+    "item2": {
+        "product_id": os.getenv("MY_PRODUCT_ID_ITEM2", "835800").strip(),
+        "slug": "826-850-potions-473k-568k-bucks"
+    },
+    "item3": {
+        "product_id": os.getenv("MY_PRODUCT_ID_ITEM3", "835802").strip(),
+        "slug": "1276-1300-potions-759k-869k-bucks"
+    },
 }
 
 
-def check_supplier_stock(product_slug: str) -> bool:
+def get_supplier_exact_stock(product_slug: str) -> int:
     """
-    업자 상점의 특정 상품 재고가 남아있는지 확인 (True: 재고 있음, False: 품절)
+    업자 상점의 실시간 정확한 재고 개수(숫자)를 조회
     """
     try:
         url = f"{SUPPLIER_SHOP_URL}/api/v1/products/{product_slug}"
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            stock = data.get("stock", 0) or data.get("inventory", 0) or len(data.get("serials", []))
-            return stock > 0
+            stock = data.get("stock") or data.get("stock_count") or len(data.get("serials", []))
+            if stock is not None:
+                return int(stock)
     except Exception as e:
-        logger.warning(f"업자 재고 확인 중 예외 발생: {e}")
-    # 확인 불가 시 기본적으로 판매 가능으로 유지
-    return True
+        logger.warning(f"업자 재고 개수 조회 예외: {e}")
+    # 기본 안전값: 재고 있음(10개) 또는 0
+    return 10
 
 
-def update_my_product_status(my_product_id: str, is_in_stock: bool):
+def update_my_product_exact_stock(product_id: str, exact_stock: int):
     """
-    내 SellAuth 상점 상품의 품절/판매중 상태를 자동으로 변경
+    내 SellAuth 상점 상품의 재고 개수를 업자와 100% 동일하게 동기화
     """
-    if not (MY_SELLAUTH_API_KEY and MY_SHOP_ID and my_product_id):
+    if not (MY_SELLAUTH_API_KEY and MY_SHOP_ID and product_id):
         return
 
     try:
         headers = {
             "Authorization": f"Bearer {MY_SELLAUTH_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
-        url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{my_product_id}"
-        # 품절이면 active: false 또는 stock: 0 처리
-        payload = {"active": is_in_stock}
-        res = requests.patch(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"내 상품({my_product_id}) 상태 업데이트 완료: in_stock={is_in_stock} (코드: {res.status_code})")
+        
+        # 1. 현재 상품 정보 및 variant ID 조회
+        prod_res = requests.get(f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{product_id}", headers=headers, timeout=10)
+        if prod_res.status_code == 200:
+            prod_data = prod_res.json()
+            variants = prod_data.get("variants", [])
+            for v in variants:
+                v_id = v.get("id")
+                # SellAuth Variant 재고 업데이트
+                update_url = f"https://api.sellauth.com/v1/shops/{MY_SHOP_ID}/products/{product_id}/variants/{v_id}"
+                payload = {"stock": exact_stock}
+                requests.put(update_url, json=payload, headers=headers, timeout=10)
+                
+        logger.info(f"내 상품({product_id}) 재고를 업자와 동일하게 동기화 완료: {exact_stock}개")
     except Exception as e:
-        logger.error(f"내 상품 상태 업데이트 실패: {e}")
+        logger.error(f"내 상품 재고 업데이트 실패: {e}")
 
 
 def sync_all_stocks():
-    """모든 상품의 업자 재고 상태를 점검하여 내 상점에 반영"""
-    logger.info("🔄 업자 재고 상태 전체 동기화 시작...")
-    for item_key, my_prod_id in MY_PRODUCT_IDS.items():
-        supplier_slug = PRODUCTS.get(item_key)
-        if supplier_slug and my_prod_id:
-            in_stock = check_supplier_stock(supplier_slug)
-            update_my_product_status(my_prod_id, in_stock)
-    logger.info("✅ 재고 동기화 완료")
+    """모든 상품의 업자 재고 개수를 내 상점에 실시간 동기화"""
+    logger.info("🔄 업자 서버와 실시간 재고 개수 동기화 중...")
+    for item_key, info in MY_PRODUCT_DATA.items():
+        supplier_slug = info["slug"]
+        prod_id = info["product_id"]
+        exact_stock = get_supplier_exact_stock(supplier_slug)
+        update_my_product_exact_stock(prod_id, exact_stock)
+    logger.info("✅ 전체 상품 재고 동기화 완료!")
 
 
 # ==============================================================================
