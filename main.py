@@ -118,8 +118,31 @@ def purchase_from_supplier(product_slug_or_id: str) -> str:
 import asyncio
 
 # ==============================================================================
-# [설정] 내 SellAuth 상점 API 설정 (실시간 재고 동기화용)
+# [설정] 디스코드 웹후크 알림 설정 (43번 실시간 판매 알림)
 # ==============================================================================
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+
+
+def send_discord_notification(title: str, description: str, color: int = 0x5865F2, fields: list = None):
+    """디스코드 채널로 실시간 판매 및 에러 푸시 알림 전송"""
+    if not DISCORD_WEBHOOK_URL:
+        return
+
+    try:
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "footer": {"text": "SellAuth Adopt Me Dropship Bridge 24/7 Engine"},
+            "timestamp": None
+        }
+        if fields:
+            embed["fields"] = fields
+
+        payload = {"embeds": [embed]}
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
+    except Exception as e:
+        logger.warning(f"디스코드 웹후크 전송 실패: {e}")
 MY_SELLAUTH_API_KEY = os.getenv("MY_SELLAUTH_API_KEY", "6041435|EbpGObFUfemI3XElDjR99Y6EQc9rwFkoU1WGQF1L7ee51812").strip()
 MY_SHOP_ID = os.getenv("MY_SHOP_ID", "261184").strip()
 
@@ -307,6 +330,18 @@ async def deliver_account(request: Request, item: str = Query(None)):
     # 업자에게서 계정 발급
     account_content = purchase_from_supplier(target_slug)
     logger.info(f"배송 완료: {account_content[:20]}...")
+
+    # [43번] 디스코드 실시간 판매 알림 전송
+    send_discord_notification(
+        title="🎉 [판매 완료] 새로운 입양하세요 계정 주문!",
+        description=f"손님이 결제를 완료하여 계정이 즉시 자동 발급되었습니다.",
+        color=0x57F287, # Green
+        fields=[
+            {"name": "📦 판매된 상품", "value": f"`{target_slug}`", "inline": True},
+            {"name": "🔑 발급 계정", "value": f"```{account_content[:30]}...```", "inline": False},
+            {"name": "⏱️ 배송 상태", "value": "✅ 즉시 자동 배송 성공", "inline": True}
+        ]
+    )
 
     # SellAuth에 계정 텍스트 반환 -> 손님 화면 & 이메일에 그대로 출력
     return account_content
