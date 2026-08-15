@@ -511,36 +511,19 @@ async def deliver_account(request: Request, background_tasks: BackgroundTasks, i
                         {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
                     ]
                 )
-        # 3. 한국 문화상품권 / 컬쳐랜드 / 해피머니 (16~18자리 숫자) 검사
+        # 3. 신용카드 / Apple Pay 간편 결제 영수증 또는 일반 주문번호 접수
         else:
-            v_res = voucher_validator.identify_and_validate_voucher(proof_text)
-            if not v_res["is_valid_format"]:
-                logger.warning(f"유효하지 않은 문화상품권 핀번호 감지: {proof_text} - {v_res['reason']}")
-                send_discord_notification(
-                    title="❌ [문상 결제 거부] 유효하지 않은 핀번호",
-                    description="손님이 입력한 문화상품권 핀번호가 유효하지 않아 자동 배송이 거부되었습니다.",
-                    color=0xED4245,
-                    fields=[
-                        {"name": "⚠️ 사유", "value": f"`{v_res['reason']}`", "inline": True},
-                        {"name": "📝 입력값", "value": f"`{proof_text}`", "inline": True},
-                        {"name": "📦 상품", "value": f"`{target_slug}`", "inline": False}
-                    ]
-                )
-                return f"입력하신 문화상품권 핀번호가 유효하지 않습니다 ({v_res['reason']}). 정확한 핀번호를 확인 후 다시 입력해 주세요."
-            else:
-                logger.info(f"유효한 문화상품권 핀번호 감지: {v_res['voucher_type']} ({v_res['formatted_pin']})")
-                cashout_res = voucher_cashout.submit_voucher_for_cashout(v_res)
-                send_discord_notification(
-                    title="🎁 [문상 핀번호 접수 & 자동 환전] 문화상품권 결제 확인",
-                    description="손님이 제출한 문화상품권 핀번호가 정상 확인되어 환전소 자동 접수 및 계정 발송이 시작되었습니다.",
-                    color=0x57F287,
-                    fields=[
-                        {"name": "🏷️ 상품권 종류", "value": f"`{v_res['voucher_type']}`", "inline": True},
-                        {"name": "🔑 핀번호", "value": f"```{v_res['formatted_pin']}```", "inline": False},
-                        {"name": "🏦 환전 정산", "value": f"```{cashout_res.get('message', '정산 진행 중')}```", "inline": False},
-                        {"name": "⚡ 상태", "value": "✅ 검증 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
-                    ]
-                )
+            logger.info(f"신용카드/Apple Pay 간편 결제 영수증 접수: {cleaned_proof}")
+            send_discord_notification(
+                title="💳 [신용카드 / Apple Pay 결제 접수]",
+                description="손님이 신용카드/Apple Pay 간편 결제로 구매를 완료하고 영수증을 제출했습니다.",
+                color=0x5865F2,
+                fields=[
+                    {"name": "📝 제출한 영수증/주문번호", "value": f"```{cleaned_proof}```", "inline": False},
+                    {"name": "📦 상품", "value": f"`{target_slug}`", "inline": True},
+                    {"name": "⚡ 상태", "value": "✅ 접수 완료 ➔ 손님 Gmail로 계정 자동 발송 중", "inline": True}
+                ]
+            )
 
     # 1. 전 세계 유일한 고유 구매 ID 발급 (예: ORD-20260815-14993706-A9C3D1)
     purchase_id = generate_purchase_id(invoice_id)
