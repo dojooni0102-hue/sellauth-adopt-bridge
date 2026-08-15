@@ -23,3 +23,5 @@ services:
         value: "835800"
       - key: MY_PRODUCT_ID_ITEM3
         value: "835802"
+      - key: DISCORD_WEBHOOK_URL
+        value: "https://discord.com/api/webhooks/1538040897579651202/7Ff-K6xh72JSw6xQwU6YB0ZhRLcsCdgzJALNJjESlJPeYYBFHA5YPzLk5_lAWodyrndU"
