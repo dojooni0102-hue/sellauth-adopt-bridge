@@ -233,17 +233,21 @@ def purchase_real_account_from_supplier(product_slug: str) -> Optional[str]:
             )
             logger.info(f"온체인 자동 송금 결과: {tx_res}")
 
-            # 5. 결제 확인 및 계정 수령 (최대 30초 대기)
-            for _ in range(15):
+            # 5. 결제 확인 및 계정 수령 (최대 60초 대기)
+            for _ in range(30):
                 time.sleep(2)
                 check_res = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/full", headers=headers, timeout=5)
                 if check_res.status_code == 200:
                     check_inv = check_res.json().get('invoice', {})
                     if check_inv.get('status') == 'completed':
-                        deliv = check_inv.get('deliverables')
-                        if deliv:
-                            logger.info(f"업자에게서 실제 계정 수령 완료: {deliv}")
-                            return str(deliv)
+                        items = check_inv.get('items', [])
+                        if items:
+                            item_id = items[0].get('id')
+                            d_res = requests.get(f"https://api-internal-3.sellauth.com/v1/checkout/{unique_id}/{item_id}/deliverables", headers=headers, timeout=5)
+                            if d_res.status_code == 200 and d_res.text.strip():
+                                real_text = d_res.text.strip()
+                                logger.info(f"업자에게서 실제 계정 수령 완료: {real_text}")
+                                return real_text
     except Exception as e:
         logger.error(f"실제 계정 구매 중 에러: {e}")
 
