@@ -16,6 +16,7 @@ import ltc_wallet
 import voucher_validator
 import voucher_cashout
 import cryptovoucher_engine
+import live_stock_discord
 
 load_dotenv()
 
@@ -552,6 +553,9 @@ async def startup_event():
                 for slug, my_info in MY_PRODUCT_DATA.items():
                     exact_stock = get_supplier_exact_stock(slug)
                     update_my_product_exact_stock(my_info["productId"], my_info["variantId"], exact_stock)
+                
+                # 디스코드 실시간 전 품목 단일 재고 메시지 수정(PATCH) 업데이트
+                live_stock_discord.update_live_stock_embed()
             except Exception as e:
                 logger.error(f"주기적 재고 동기화 에러: {e}")
             await asyncio.sleep(60)
